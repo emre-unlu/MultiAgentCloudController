@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from typing import Any, Dict
+from uuid import uuid4
 
 from ..graph.state import OuterAgentState
+from .chroma_mcp_client import ChromaMCPClient
 
 
 # -----------------------------------------------------------------------------
@@ -37,21 +39,43 @@ def build_incident_document(state: OuterAgentState) -> Dict[str, Any]:
 
 
 # -----------------------------------------------------------------------------
-# Placeholder persistence backend
+# Chroma MCP persistence backend
 # -----------------------------------------------------------------------------
 
 
 def persist_incident_document(document: Dict[str, Any]) -> Dict[str, Any]:
-    """Placeholder incident persistence operation.
+    """Persist incident knowledge through Chroma MCP."""
 
-    Real implementation should persist the document through Chroma MCP or a
-    related incident-memory backend.
-    """
+    client = ChromaMCPClient()
+    document_id = f"incident-{uuid4()}"
+
+    metadata = {
+        "title": "Kubernetes incident",
+        "suspected_faults": document.get("suspected_faults", []),
+        "suspected_services": document.get("suspected_services", []),
+        "mitigation_hints": (document.get("mitigation_report") or {}).get("suggested_actions", []),
+        "retrieval_confidence": document.get("retrieval_confidence", 0.0),
+    }
+
+    try:
+        client.ensure_collection()
+        client.add_document(
+            document_id=document_id,
+            text=document.get("evidence_summary", "") or document.get("user_query", ""),
+            metadata=metadata,
+        )
+    except RuntimeError as exc:
+        return {
+            "status": "failed",
+            "stored": False,
+            "error": str(exc),
+            "document_id": document_id,
+        }
 
     return {
-        "status": "persisted_placeholder",
+        "status": "persisted",
         "stored": True,
-        "document_id": "placeholder-incident-doc-001",
+        "document_id": document_id,
         "document_preview": {
             "user_query": document.get("user_query", ""),
             "suspected_faults": document.get("suspected_faults", []),
