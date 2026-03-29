@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..graph.routes import should_mark_incident_as_new
 from ..graph.state import OuterAgentState
+from .chroma_mcp_client import ChromaMCPClient
 
 
 DEFAULT_TOP_K = 5
@@ -56,35 +57,59 @@ def build_incident_retrieval_query(state: OuterAgentState) -> Dict[str, Any]:
 
 
 # -----------------------------------------------------------------------------
-# Placeholder Chroma MCP integration
+# Chroma MCP integration
 # -----------------------------------------------------------------------------
 
 
-def query_incident_store(query: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Placeholder incident-store lookup.
+def _normalize_query_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    ids = payload.get("ids") or [[]]
+    docs = payload.get("documents") or [[]]
+    metadatas = payload.get("metadatas") or [[]]
+    distances = payload.get("distances") or [[]]
 
-    Real implementation should call Chroma MCP / ChromaDB and return a ranked
-    list of similar incident records.
-    """
+    ranked: List[Dict[str, Any]] = []
+    for idx, incident_id in enumerate(ids[0] if ids else []):
+        metadata = metadatas[0][idx] if metadatas and metadatas[0] and idx < len(metadatas[0]) else {}
+        distance = distances[0][idx] if distances and distances[0] and idx < len(distances[0]) else 1.0
+        similarity = max(0.0, min(1.0, 1.0 - float(distance)))
+        ranked.append(
+            {
+                "incident_id": incident_id,
+                "title": metadata.get("title", "Historical incident"),
+                "summary": docs[0][idx] if docs and docs[0] and idx < len(docs[0]) else "",
+                "suspected_faults": list(metadata.get("suspected_faults", [])),
+                "suspected_services": list(metadata.get("suspected_services", [])),
+                "mitigation_hints": list(metadata.get("mitigation_hints", [])),
+                "score": similarity,
+                "metadata": metadata,
+            }
+        )
+
+    return ranked
+
+
+def query_incident_store(query: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Query incident history through Chroma MCP."""
 
     query_text = query.get("query_text", "")
     if not query_text:
         return []
 
-    return [
-        {
-            "incident_id": "placeholder-incident-001",
-            "title": "Example historical incident",
-            "summary": "Placeholder similar incident returned from the incident store.",
-            "suspected_faults": ["unknown_fault"],
-            "suspected_services": [],
-            "mitigation_hints": ["Inspect recent cluster changes before deeper investigation."],
-            "score": 0.62,
-            "metadata": {
-                "source": "placeholder_chroma_store",
-            },
-        }
-    ]
+    client = ChromaMCPClient()
+    try:
+        client.ensure_collection()
+        payload = client.query_documents(
+            query_text=query_text,
+            top_k=int(query.get("top_k", DEFAULT_TOP_K)),
+            metadata_filter=query.get("metadata_filter") or None,
+        )
+    except RuntimeError:
+        return []
+
+    if not isinstance(payload, dict):
+        return []
+
+    return _normalize_query_results(payload)
 
 
 # -----------------------------------------------------------------------------

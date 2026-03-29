@@ -191,6 +191,28 @@ All important diagnosis claims should be traceable to tool evidence or retrieved
 ### Reusability
 The inner tool-summary loop should be generic and reusable across multiple agents.
 
+
+## Chroma MCP Client Setup
+
+This repository now includes a concrete Chroma MCP client integration for both:
+
+- incident retrieval (`agent/src/retrieval/incident_retriever.py`)
+- incident persistence (`agent/src/retrieval/persistence.py`)
+
+Configuration is environment-driven via `.env` values:
+
+- `CHROMA_MCP_COMMAND` (default: `uvx`)
+- `CHROMA_MCP_ARGS` (default: `chroma-mcp`)
+- `CHROMA_MCP_COLLECTION` (default: `incident_history`)
+
+Example (included in `.env.example`):
+
+```bash
+CHROMA_MCP_COMMAND=uvx
+CHROMA_MCP_ARGS="chroma-mcp --client-type persistent --data-dir ./.chroma"
+CHROMA_MCP_COLLECTION=incident_history
+```
+
 ## Planned Repository Structure
 
 ```text
