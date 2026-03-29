@@ -1,0 +1,6 @@
+[submodule "Kubernetes-Mcp"]
+	path = Kubernetes-Mcp
+	url = https://github.com/emre-unlu/Kubernetes-Mcp.git
+[submodule "AIOpsLab"]
+	path = AIOpsLab
+	url = https://github.com/microsoft/AIOpsLab.git
