@@ -12,27 +12,14 @@ from ..tool_loop import build_tool_loop
 # -----------------------------------------------------------------------------
 
 
-TRIAGE_TOOL_NAME = "cluster_triage_overview"
+TRIAGE_TOOL_NAME = "get_backend_status"
 
 
 def detection_lite_agent_node(state: ToolSummaryState) -> ToolSummaryState:
-    """Reasoning node for the lightweight triage stage.
-
-    Real implementation should:
-    - inspect the current triage goal,
-    - reason over scratchpad + collected summaries,
-    - select a small number of cheap/high-value tools,
-    - stop once it has enough evidence to prepare incident retrieval,
-    - write a compact triage result into `final_output`.
-
-    Current placeholder behavior:
-    - if the tool budget is exhausted, stop and emit a minimal triage result
-    - otherwise, request a single cheap cluster triage tool
-    """
-
     tool_calls_used = int(state.get("tool_calls_used", 0))
     max_tool_calls = int(state.get("max_tool_calls", 2))
     scratchpad = state.get("scratchpad", {})
+    summaries = state.get("collected_summaries", [])
 
     if tool_calls_used >= max_tool_calls:
         state["next_step"] = "end"
@@ -41,17 +28,41 @@ def detection_lite_agent_node(state: ToolSummaryState) -> ToolSummaryState:
             "suspected_services": scratchpad.get("suspected_services", []),
             "suspected_pods": scratchpad.get("suspected_pods", []),
             "evidence_summary": scratchpad.get("evidence_summary", ""),
-            "supporting_summaries": state.get("collected_summaries", []),
+            "supporting_summaries": summaries,
             "status": "tool_budget_exhausted",
         }
         return state
 
-    state["selected_tool"] = TRIAGE_TOOL_NAME
-    state["tool_input"] = {
-        "cluster_context": scratchpad.get("cluster_context", {}),
-        "user_query": state.get("user_query", ""),
-    }
-    state["next_step"] = "use_tool"
+    if tool_calls_used == 0:
+        state["selected_tool"] = "get_backend_status"
+        state["tool_input"] = {}
+        state["next_step"] = "use_tool"
+        return state
+
+    if tool_calls_used == 1:
+        latest_summary = state.get("latest_summary", {})
+        backend_status = latest_summary.get("backend_status", {})
+        kubernetes_ok = backend_status.get("kubernetes", {}).get("status") == "OK"
+
+        if kubernetes_ok:
+            state["selected_tool"] = "get_cluster_overview"
+            state["tool_input"] = {
+                "namespace": scratchpad.get("cluster_context", {}).get("namespace"),
+            }
+            state["next_step"] = "use_tool"
+        else:
+            state["next_step"] = "end"
+            state["final_output"] = {
+                "suspected_faults": ["kubernetes_unavailable"],
+                "suspected_services": [],
+                "suspected_pods": [],
+                "evidence_summary": "Kubernetes backend is unavailable during detection-lite.",
+                "supporting_summaries": summaries,
+                "status": "completed_detection_lite",
+            }
+        return state
+
+    state["next_step"] = "end"
     return state
 
 
@@ -84,25 +95,37 @@ def detection_lite_tool_node(state: ToolSummaryState) -> ToolSummaryState:
 
 
 def detection_lite_summarizer_node(state: ToolSummaryState) -> ToolSummaryState:
-    """Placeholder summarizer node for lightweight triage.
-
-    Real implementation should compress the raw triage output into a compact,
-    retrieval-friendly fingerprint with candidate services, pods, fault types,
-    and a short evidence summary.
-
-    This node runs after every tool use.
-    """
-
     latest_tool_result = state.get("latest_tool_result", {})
     raw_result = latest_tool_result.get("raw_result", {})
+    tool_name = latest_tool_result.get("tool_name", TRIAGE_TOOL_NAME)
 
-    latest_summary = {
-        "tool_name": latest_tool_result.get("tool_name", TRIAGE_TOOL_NAME),
-        "suspected_faults": raw_result.get("suspected_faults", []),
-        "suspected_services": raw_result.get("suspected_services", []),
-        "suspected_pods": raw_result.get("suspected_pods", []),
-        "evidence_summary": raw_result.get("evidence_summary", ""),
-    }
+    if "error" in raw_result:
+        latest_summary = {
+            "tool_name": tool_name,
+            "error": raw_result["error"],
+            "evidence_summary": f"{tool_name} failed.",
+        }
+    elif tool_name == "get_backend_status":
+        latest_summary = {
+            "tool_name": tool_name,
+            "backend_status": raw_result,
+            "evidence_summary": "Backend availability collected.",
+        }
+    elif tool_name == "get_cluster_overview":
+        latest_summary = {
+            "tool_name": tool_name,
+            "raw_result": raw_result,
+            "suspected_faults": [],
+            "suspected_services": raw_result.get("services", []),
+            "suspected_pods": raw_result.get("pods", []),
+            "evidence_summary": "Cluster overview collected.",
+        }
+    else:
+        latest_summary = {
+            "tool_name": tool_name,
+            "raw_result": raw_result,
+            "evidence_summary": f"{tool_name} completed.",
+        }
 
     summaries = list(state.get("collected_summaries", []))
     summaries.append(latest_summary)
@@ -111,16 +134,19 @@ def detection_lite_summarizer_node(state: ToolSummaryState) -> ToolSummaryState:
     state["collected_summaries"] = summaries
     state["tool_calls_used"] = int(state.get("tool_calls_used", 0)) + 1
 
-    # Placeholder stopping rule: one summarized triage pass is enough.
-    state["next_step"] = "end"
-    state["final_output"] = {
-        "suspected_faults": latest_summary.get("suspected_faults", []),
-        "suspected_services": latest_summary.get("suspected_services", []),
-        "suspected_pods": latest_summary.get("suspected_pods", []),
-        "evidence_summary": latest_summary.get("evidence_summary", ""),
-        "supporting_summaries": summaries,
-        "status": "completed_detection_lite",
-    }
+    if tool_name == "get_cluster_overview" or "error" in raw_result:
+        state["next_step"] = "end"
+        state["final_output"] = {
+            "suspected_faults": latest_summary.get("suspected_faults", []),
+            "suspected_services": latest_summary.get("suspected_services", []),
+            "suspected_pods": latest_summary.get("suspected_pods", []),
+            "evidence_summary": latest_summary.get("evidence_summary", ""),
+            "supporting_summaries": summaries,
+            "status": "completed_detection_lite",
+        }
+    else:
+        state["next_step"] = "use_tool"
+
     return state
 
 

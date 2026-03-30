@@ -1,0 +1,28 @@
+[project]
+name = "multiagentcloudcontroller"
+version = "0.1.0"
+description = "Kubernetes diagnostics agent with LangGraph, Kubernetes MCP, Chroma MCP, and AIOpsLab integration."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "langchain>=0.3.0,<0.4.0",
+    "langgraph>=0.6.0,<0.7.0",
+    "langchain-openai>=0.3.0,<0.4.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "mcp[cli]>=1.17.0,<2.0.0",
+    "langsmith>=0.4.0,<0.5.0",
+    "chroma-mcp-server>=0.2.1,<1.0.0"
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+packages = [
+    { include = "multiagentcloudcontroller", from = "agent/src" }
+]
+
+[tool.poetry.scripts]
+multiagentcloudcontroller = "multiagentcloudcontroller.main:main"
+render-graphs = "multiagentcloudcontroller.render_graph:main"

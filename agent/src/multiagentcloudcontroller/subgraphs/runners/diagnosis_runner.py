@@ -52,10 +52,9 @@ def diagnosis_agent_node(state: ToolSummaryState) -> ToolSummaryState:
             "clearly after this step."
         ).strip()
 
-    state["selected_tool"] = state.get("selected_tool", "") or "cluster_overview"
-    state["tool_input"] = state.get("tool_input", {}) or {
-        "focus_services": state.get("scratchpad", {}).get("suspected_services", []),
-        "focus_pods": state.get("scratchpad", {}).get("suspected_pods", []),
+    state["selected_tool"] = state.get("selected_tool", "") or "get_cluster_overview"
+    state["tool_input"] = {
+        "namespace": state.get("scratchpad", {}).get("cluster_context", {}).get("namespace"),
     }
     state["next_step"] = "use_tool"
     return state

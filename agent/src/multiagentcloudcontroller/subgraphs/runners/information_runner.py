@@ -11,8 +11,7 @@ from ..tool_loop import build_tool_loop
 # Placeholder inner-loop node implementations for the information stage
 # -----------------------------------------------------------------------------
 
-
-INFORMATION_TOOL_NAME = "information_lookup"
+INFORMATION_TOOL_NAME = "get_backend_status"
 
 
 def information_agent_node(state: ToolSummaryState) -> ToolSummaryState:
@@ -51,10 +50,7 @@ def information_agent_node(state: ToolSummaryState) -> ToolSummaryState:
         ).strip()
 
     state["selected_tool"] = INFORMATION_TOOL_NAME
-    state["tool_input"] = {
-        "user_query": state.get("user_query", ""),
-        "cluster_context": state.get("scratchpad", {}).get("cluster_context", {}),
-    }
+    state["tool_input"] = {}
     state["next_step"] = "use_tool"
     return state
 

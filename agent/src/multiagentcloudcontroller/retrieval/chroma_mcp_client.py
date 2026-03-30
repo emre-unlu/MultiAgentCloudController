@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 from typing import Any, Dict, List, Optional
+import sys
 
 
 DEFAULT_COLLECTION = "incident_history"
@@ -23,16 +24,25 @@ class ChromaMCPClient:
         command: Optional[str] = None,
         args: Optional[List[str]] = None,
         collection_name: Optional[str] = None,
+        cwd: Optional[str] = None,
     ) -> None:
-        self.command = command or os.getenv("CHROMA_MCP_COMMAND", "uvx")
+        self.command = command or os.getenv("CHROMA_MCP_COMMAND", sys.executable)
+
         if args is not None:
             self.args = args
         else:
-            raw_args = os.getenv("CHROMA_MCP_ARGS", "chroma-mcp")
+            raw_args = os.getenv(
+                "CHROMA_MCP_ARGS",
+                "-m chroma_mcp.cli --client-type persistent --data-dir ./.chroma",
+            )
             self.args = shlex.split(raw_args)
+
         self.collection_name = collection_name or os.getenv(
-            "CHROMA_MCP_COLLECTION", DEFAULT_COLLECTION
+            "CHROMA_MCP_COLLECTION",
+            DEFAULT_COLLECTION,
         )
+        self.cwd = cwd or os.getenv("CHROMA_MCP_CWD")
+
 
     def query_documents(
         self,
