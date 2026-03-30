@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ...graph.state import OuterAgentState, ToolSummaryState, build_initial_tool_state
+from ...retrieval.kubernetes_mcp_client import KubernetesMCPClient
 from ..tool_loop import build_tool_loop
 
 
@@ -60,21 +61,24 @@ def information_agent_node(state: ToolSummaryState) -> ToolSummaryState:
 
 
 def information_tool_node(state: ToolSummaryState) -> ToolSummaryState:
-    """Placeholder tool execution node for the information stage.
-
-    Real implementation should call an appropriate MCP tool or helper from your
-    Kubernetes-Mcp server and store the raw output in `latest_tool_result`.
-    """
+    """Execute the selected Kubernetes MCP tool for the information stage."""
 
     selected_tool = state.get("selected_tool", INFORMATION_TOOL_NAME)
     tool_input = state.get("tool_input", {})
 
+    client = KubernetesMCPClient()
+    try:
+        raw_result = client.call_tool(selected_tool, tool_input)
+    except RuntimeError as exc:
+        raw_result = {
+            "error": str(exc),
+            "message": "Information tool execution failed.",
+        }
+
     state["latest_tool_result"] = {
         "tool_name": selected_tool,
         "tool_input": tool_input,
-        "raw_result": {
-            "message": "Placeholder informational tool result.",
-        },
+        "raw_result": raw_result,
     }
     return state
 
@@ -92,7 +96,9 @@ def information_summarizer_node(state: ToolSummaryState) -> ToolSummaryState:
 
     latest_summary = {
         "tool_name": latest_tool_result.get("tool_name", INFORMATION_TOOL_NAME),
-        "summary": raw_result.get("message", "Placeholder informational summary."),
+        "summary": raw_result.get("message")
+        or raw_result.get("raw")
+        or "No informational details returned by tool.",
     }
 
     summaries = list(state.get("collected_summaries", []))
@@ -107,7 +113,7 @@ def information_summarizer_node(state: ToolSummaryState) -> ToolSummaryState:
     state["final_output"] = {
         "answer": latest_summary.get("summary", ""),
         "supporting_summaries": summaries,
-        "status": "completed_placeholder_information_response",
+        "status": "completed_information_response",
     }
     return state
 

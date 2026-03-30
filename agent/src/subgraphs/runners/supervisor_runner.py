@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ...graph.state import OuterAgentState, ToolSummaryState, build_initial_tool_state
+from ...retrieval.kubernetes_mcp_client import KubernetesMCPClient
 from ..tool_loop import build_tool_loop
 
 
@@ -62,22 +63,25 @@ def supervisor_agent_node(state: ToolSummaryState) -> ToolSummaryState:
 
 
 def supervisor_tool_node(state: ToolSummaryState) -> ToolSummaryState:
-    """Placeholder tool execution node for the supervisor stage.
-
-    Real implementation may call a lightweight evidence-checking or grounding
-    helper and should store the raw result in `latest_tool_result`.
-    """
+    """Execute the selected Kubernetes MCP tool for supervisor review."""
 
     selected_tool = state.get("selected_tool", SUPERVISOR_TOOL_NAME)
     tool_input = state.get("tool_input", {})
 
+    client = KubernetesMCPClient()
+    try:
+        raw_result = client.call_tool(selected_tool, tool_input)
+    except RuntimeError as exc:
+        raw_result = {
+            "error": str(exc),
+            "grounding_ok": False,
+            "notes": "Supervisor evidence review failed.",
+        }
+
     state["latest_tool_result"] = {
         "tool_name": selected_tool,
         "tool_input": tool_input,
-        "raw_result": {
-            "grounding_ok": False,
-            "notes": "Placeholder supervisor evidence review result.",
-        },
+        "raw_result": raw_result,
     }
     return state
 
@@ -125,7 +129,7 @@ def supervisor_summarizer_node(state: ToolSummaryState) -> ToolSummaryState:
         "supervisor_verdict": verdict,
         "supervisor_feedback": feedback,
         "supporting_summaries": summaries,
-        "status": "completed_placeholder_supervisor_review",
+        "status": "completed_supervisor_review",
     }
     return state
 
