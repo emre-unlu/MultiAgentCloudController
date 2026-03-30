@@ -294,3 +294,126 @@ We will implement the project in this order:
 7. **Mitigation report and persistence layer**
 8. **AIOpsLab adapter and experiment runner**
 
+## Tools Assigned to Agents
+
+
+### 1. Information Agent
+
+Purpose:
+- Answer informational Kubernetes / observability questions
+- Avoid deep diagnosis
+- Stay lightweight and safe
+
+Assigned tools:
+- `get_cluster_overview`
+- `get_pods_from_service`
+- `get_services_from_pod`
+- `exec_shell`
+
+Examples of acceptable informational shell usage:
+- `kubectl get ns`
+- `kubectl get svc -A`
+- `kubectl get pods -A`
+- `kubectl config current-context`
+
+---
+
+### 2. Detection-Lite Agent
+
+Purpose:
+- Perform cheap triage
+- Build a compact incident fingerprint
+- Identify likely affected services or pods
+- Collect enough evidence for retrieval and handoff to diagnosis
+
+Assigned tools:
+- `get_backend_status`
+- `get_cluster_overview`
+- `get_service_triage_metrics`
+- `get_pod_triage_metrics`
+- `summarize_service_logs`
+- `summarize_pod_logs`
+
+Recommended order:
+1. `get_backend_status`
+2. `get_cluster_overview`
+3. if Prometheus is available:
+   - `get_service_triage_metrics`
+   - `get_pod_triage_metrics`
+4. if logs are needed:
+   - `summarize_service_logs`
+   - `summarize_pod_logs`
+
+
+---
+
+### 3. Diagnosis Agent
+
+Purpose:
+- Perform the main root-cause analysis
+- Use richer evidence than detection-lite
+- Drill down from service-level suspicion to pod-level evidence
+- Combine metrics, logs, topology, traces, and controlled shell usage when available
+
+Assigned tools:
+- `get_pods_from_service`
+- `get_services_from_pod`
+- `summarize_service_logs`
+- `summarize_pod_logs`
+- `get_service_metrics`
+- `get_pod_metrics`
+- `get_service_triage_metrics`
+- `get_pod_triage_metrics`
+- `get_trace_summaries`
+- `get_trace_details`
+- `get_service_dependencies`
+- `get_services_used_by`
+- `get_service_map`
+- `exec_kubectl`
+- `exec_shell`
+
+Suggested grouping:
+
+#### Core Kubernetes / logs
+- `get_pods_from_service`
+- `get_services_from_pod`
+- `summarize_service_logs`
+- `summarize_pod_logs`
+
+#### Metrics
+- `get_service_metrics`
+- `get_pod_metrics`
+- `get_service_triage_metrics`
+- `get_pod_triage_metrics`
+
+#### Traces
+- `get_trace_summaries`
+- `get_trace_details`
+
+#### Dependency graph
+- `get_service_dependencies`
+- `get_services_used_by`
+- `get_service_map`
+
+#### Fallback / direct inspection
+- `exec_kubectl`
+- `exec_shell`
+
+
+---
+
+### 4. Supervisor Agent
+
+Purpose:
+- Check whether the diagnosis agent gathered enough evidence
+- Verify that the diagnostic conclusion is grounded
+- Decide whether to approve or request more investigation
+
+Assigned tools:
+- `get_service_topology_summary`
+
+Optional small verification tool:
+- `get_backend_status`
+
+
+---
