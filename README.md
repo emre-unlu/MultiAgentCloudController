@@ -49,7 +49,7 @@ This is used to improve retrieval for future incidents.
 This project is intended to work alongside two external components:
 
 ### 1. Kubernetes-Mcp
-Your existing MCP server repository acts as the observability and tooling layer.
+Our existing MCP server repository acts as the observability and tooling layer.
 
 Responsibilities include:
 
