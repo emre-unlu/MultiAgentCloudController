@@ -42,6 +42,8 @@ Stores incident knowledge back into the incident-history system when appropriate
 
 This is used to improve retrieval for future incidents.
 
+---
+
 ## Architecture
 
 This project is intended to work alongside two external components:
@@ -78,6 +80,7 @@ Responsibilities include:
 - storing structured incident summaries,
 - enabling incident-guided diagnosis.
 
+---
 
 ## Tools Assigned to Agents
 
@@ -101,7 +104,6 @@ Examples of acceptable informational shell usage:
 - `kubectl get pods -A`
 - `kubectl config current-context`
 
----
 
 ### 2. Detection-Lite Agent
 
@@ -129,8 +131,6 @@ Recommended order:
    - `summarize_service_logs`
    - `summarize_pod_logs`
 
-
----
 
 ### 3. Diagnosis Agent
 
@@ -185,8 +185,6 @@ Suggested grouping:
 - `exec_shell`
 
 
----
-
 ### 4. Supervisor Agent
 
 Purpose:
@@ -199,7 +197,6 @@ Assigned tools:
 
 Optional small verification tool:
 - `get_backend_status`
-
 
 ---
 
@@ -226,6 +223,8 @@ All important diagnosis claims should be traceable to tool evidence or retrieved
 
 ### Reusability
 The inner tool-summary loop should be generic and reusable across multiple agents.
+
+---
 
 ## Planned Repository Structure
 
