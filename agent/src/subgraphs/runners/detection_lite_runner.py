@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ...graph.state import OuterAgentState, ToolSummaryState, build_initial_tool_state
+from ...retrieval.kubernetes_mcp_client import KubernetesMCPClient
 from ..tool_loop import build_tool_loop
 
 
@@ -56,25 +57,27 @@ def detection_lite_agent_node(state: ToolSummaryState) -> ToolSummaryState:
 
 
 def detection_lite_tool_node(state: ToolSummaryState) -> ToolSummaryState:
-    """Placeholder tool execution node for lightweight triage.
-
-    Real implementation should call a cheap MCP tool or a small bundle of
-    observability tools from Kubernetes-Mcp and store the raw output in
-    `latest_tool_result`.
-    """
+    """Execute the selected Kubernetes MCP tool for lightweight triage."""
 
     selected_tool = state.get("selected_tool", TRIAGE_TOOL_NAME)
     tool_input = state.get("tool_input", {})
 
-    state["latest_tool_result"] = {
-        "tool_name": selected_tool,
-        "tool_input": tool_input,
-        "raw_result": {
+    client = KubernetesMCPClient()
+    try:
+        raw_result = client.call_tool(selected_tool, tool_input)
+    except RuntimeError as exc:
+        raw_result = {
+            "error": str(exc),
             "suspected_faults": ["unknown_fault"],
             "suspected_services": [],
             "suspected_pods": [],
-            "evidence_summary": "Placeholder triage output from a cheap cluster overview tool.",
-        },
+            "evidence_summary": "Triage tool execution failed.",
+        }
+
+    state["latest_tool_result"] = {
+        "tool_name": selected_tool,
+        "tool_input": tool_input,
+        "raw_result": raw_result,
     }
     return state
 
@@ -116,7 +119,7 @@ def detection_lite_summarizer_node(state: ToolSummaryState) -> ToolSummaryState:
         "suspected_pods": latest_summary.get("suspected_pods", []),
         "evidence_summary": latest_summary.get("evidence_summary", ""),
         "supporting_summaries": summaries,
-        "status": "completed_placeholder_detection_lite",
+        "status": "completed_detection_lite",
     }
     return state
 
