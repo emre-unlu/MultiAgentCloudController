@@ -17,6 +17,9 @@ from ...tool_registry.detection_lite_tools import (
 )
 
 
+LOW_PRIORITY_SERVICES = {"kubernetes", "kube-dns", "coredns"}
+
+
 def _backend_available(backend_status: Dict[str, Any], name: str) -> bool:
     return bool(backend_status.get(name, {}).get("available", False))
 
@@ -50,9 +53,48 @@ def _pick_relevant_service(
         if name.lower() in q:
             return name
     for name in service_names:
-        if name != "kubernetes":
+        if name not in LOW_PRIORITY_SERVICES:
             return name
-    return service_names[0] if service_names else None
+    return None
+
+
+def _sanitize_detection_lite_tool_input(
+    *, tool_name: str, tool_input: Dict[str, Any], scratchpad: Dict[str, Any]
+) -> Dict[str, Any]:
+    namespace = scratchpad.get("cluster_context", {}).get("namespace")
+    query_service_candidates = list(scratchpad.get("query_service_candidates", []))
+    query_pod_candidates = list(scratchpad.get("query_pod_candidates", []))
+
+    if tool_name == BACKEND_STATUS_TOOL:
+        return {}
+
+    if tool_name == CLUSTER_OVERVIEW_TOOL:
+        out: Dict[str, Any] = {}
+        if isinstance(tool_input, dict) and isinstance(tool_input.get("namespace"), str):
+            out["namespace"] = tool_input["namespace"]
+        elif isinstance(namespace, str) and namespace:
+            out["namespace"] = namespace
+        return out
+
+    if tool_name in {SERVICE_TRIAGE_METRICS_TOOL, SUMMARIZE_SERVICE_LOGS_TOOL}:
+        service_name = tool_input.get("service_name")
+        if not service_name and query_service_candidates:
+            service_name = query_service_candidates[0]
+        out = {"service_name": service_name} if service_name else {}
+        if isinstance(namespace, str) and namespace:
+            out["namespace"] = namespace
+        return out
+
+    if tool_name in {POD_TRIAGE_METRICS_TOOL, SUMMARIZE_POD_LOGS_TOOL}:
+        pod_name = tool_input.get("pod_name")
+        if not pod_name and query_pod_candidates:
+            pod_name = query_pod_candidates[0]
+        out = {"pod_name": pod_name} if pod_name else {}
+        if isinstance(namespace, str) and namespace:
+            out["namespace"] = namespace
+        return out
+
+    return tool_input
 
 
 
@@ -127,7 +169,12 @@ def detection_lite_agent_node(state: ToolSummaryState) -> ToolSummaryState:
 
 def detection_lite_tool_node(state: ToolSummaryState) -> ToolSummaryState:
     selected_tool = state.get("selected_tool")
-    tool_input = state.get("tool_input", {})
+    scratchpad = dict(state.get("scratchpad", {}))
+    tool_input = _sanitize_detection_lite_tool_input(
+        tool_name=selected_tool,
+        tool_input=state.get("tool_input", {}),
+        scratchpad=scratchpad,
+    )
 
     if not selected_tool:
         raise RuntimeError("Detection-lite tool node entered without selected_tool.")
@@ -186,7 +233,10 @@ def detection_lite_summarizer_node(state: ToolSummaryState) -> ToolSummaryState:
         latest_summary["evidence_summary"] = "Backend availability collected."
 
     elif tool_name == CLUSTER_OVERVIEW_TOOL:
-        services = _extract_service_names(raw_result)
+        all_services = _extract_service_names(raw_result)
+        services = [name for name in all_services if name not in LOW_PRIORITY_SERVICES]
+        if not services:
+            services = list(scratchpad.get("query_service_candidates", []))
         pods = _extract_pod_names(raw_result)
 
         scratchpad["suspected_services"] = services
@@ -337,7 +387,6 @@ def run_detection_lite_stage(state: OuterAgentState) -> OuterAgentState:
     state["suspected_pods"] = final_output.get("suspected_pods", [])
     state["evidence_summary"] = final_output.get("evidence_summary", "")
     return state
-
 
 
 
