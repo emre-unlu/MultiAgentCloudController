@@ -40,9 +40,9 @@ def _pick_relevant_service(user_query: str, service_names: List[str]) -> str | N
         if name.lower() in q:
             return name
     for name in service_names:
-        if name != "kubernetes":
+        if name not in LOW_PRIORITY_SERVICES:
             return name
-    return service_names[0] if service_names else None
+    return None
 
 
 
@@ -93,6 +93,7 @@ def _append_unique(items: List[str], new_items: List[str]) -> List[str]:
 
 
 MAX_LOGIC_STEPS = 8
+LOW_PRIORITY_SERVICES = {"kubernetes", "kube-dns", "coredns"}
 
 
 
