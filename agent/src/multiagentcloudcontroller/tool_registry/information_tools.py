@@ -1,0 +1,11 @@
+CLUSTER_OVERVIEW_TOOL = "get_cluster_overview"
+GET_PODS_FROM_SERVICE_TOOL = "get_pods_from_service"
+GET_SERVICES_FROM_POD_TOOL = "get_services_from_pod"
+EXEC_SHELL_TOOL = "exec_shell"
+
+INFORMATION_TOOLS = [
+    CLUSTER_OVERVIEW_TOOL,
+    GET_PODS_FROM_SERVICE_TOOL,
+    GET_SERVICES_FROM_POD_TOOL,
+    EXEC_SHELL_TOOL,
+]

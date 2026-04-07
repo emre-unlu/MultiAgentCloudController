@@ -75,8 +75,13 @@ class ToolSummaryState(TypedDict, total=False):
     # Optional agent-local working memory
     scratchpad: Dict[str, Any]
 
+    # Tool availability / LLM decision support
+    allowed_tools: List[str]
+    latest_rationale: str
+    latest_decision_confidence: float
+
     # Tool invocation state
-    selected_tool: str
+    selected_tool: Optional[str]
     tool_input: Dict[str, Any]
     latest_tool_result: Dict[str, Any]
     latest_summary: Dict[str, Any]

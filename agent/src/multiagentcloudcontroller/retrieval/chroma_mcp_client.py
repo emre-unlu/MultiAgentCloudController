@@ -26,15 +26,12 @@ class ChromaMCPClient:
         collection_name: Optional[str] = None,
         cwd: Optional[str] = None,
     ) -> None:
-        self.command = command or os.getenv("CHROMA_MCP_COMMAND", sys.executable)
+        self.command = command or os.getenv("CHROMA_MCP_COMMAND") or sys.executable
 
         if args is not None:
             self.args = args
         else:
-            raw_args = os.getenv(
-                "CHROMA_MCP_ARGS",
-                "-m chroma_mcp.cli --client-type persistent --data-dir ./.chroma",
-            )
+            raw_args = os.getenv("CHROMA_MCP_ARGS") or "-m chroma_mcp.cli --client-type persistent --data-dir ./.chroma"
             self.args = shlex.split(raw_args)
 
         self.collection_name = collection_name or os.getenv(

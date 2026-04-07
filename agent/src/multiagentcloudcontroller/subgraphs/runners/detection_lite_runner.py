@@ -1,33 +1,65 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from ...graph.state import OuterAgentState, ToolSummaryState, build_initial_tool_state
 from ...retrieval.kubernetes_mcp_client import KubernetesMCPClient
 from ..tool_loop import build_tool_loop
+from ...llm.decision import DecisionError, decide_detection_lite_next_step
+from ...tool_registry.detection_lite_tools import (
+    BACKEND_STATUS_TOOL,
+    CLUSTER_OVERVIEW_TOOL,
+    DETECTION_LITE_TOOLS,
+    POD_TRIAGE_METRICS_TOOL,
+    SERVICE_TRIAGE_METRICS_TOOL,
+    SUMMARIZE_POD_LOGS_TOOL,
+    SUMMARIZE_SERVICE_LOGS_TOOL,
+)
 
 
-# -----------------------------------------------------------------------------
-# Detection-lite stage
-# -----------------------------------------------------------------------------
+def _backend_available(backend_status: Dict[str, Any], name: str) -> bool:
+    return bool(backend_status.get(name, {}).get("available", False))
 
 
-BACKEND_STATUS_TOOL = "get_backend_status"
-CLUSTER_OVERVIEW_TOOL = "get_cluster_overview"
+def _extract_service_names(raw_result: Dict[str, Any]) -> List[str]:
+    services = raw_result.get("services", [])
+    names: List[str] = []
+    for service in services:
+        if isinstance(service, dict) and service.get("name"):
+            names.append(str(service["name"]))
+    return names
+
+
+def _extract_pod_names(raw_result: Dict[str, Any]) -> List[str]:
+    pods = raw_result.get("pods", [])
+    names: List[str] = []
+    for pod in pods:
+        if isinstance(pod, dict) and pod.get("name"):
+            names.append(str(pod["name"]))
+        elif isinstance(pod, str):
+            names.append(pod)
+    return names
+
+
+def _pick_relevant_service(
+    user_query: str,
+    service_names: List[str],
+) -> str | None:
+    q = user_query.lower()
+    for name in service_names:
+        if name.lower() in q:
+            return name
+    for name in service_names:
+        if name != "kubernetes":
+            return name
+    return service_names[0] if service_names else None
+
 
 
 def detection_lite_agent_node(state: ToolSummaryState) -> ToolSummaryState:
-    """Reasoning node for the lightweight triage stage.
-
-    Current behavior:
-    1. Call backend status first.
-    2. If Kubernetes is available, call cluster overview.
-    3. Stop after building a small triage fingerprint.
-    """
-
     tool_calls_used = int(state.get("tool_calls_used", 0))
-    max_tool_calls = int(state.get("max_tool_calls", 2))
-    scratchpad = state.get("scratchpad", {})
+    max_tool_calls = int(state.get("max_tool_calls", 5))
+    scratchpad = dict(state.get("scratchpad", {}))
     summaries = list(state.get("collected_summaries", []))
 
     if tool_calls_used >= max_tool_calls:
@@ -43,46 +75,62 @@ def detection_lite_agent_node(state: ToolSummaryState) -> ToolSummaryState:
         }
         return state
 
-    if tool_calls_used == 0:
-        state["selected_tool"] = BACKEND_STATUS_TOOL
+    allowed_tools = list(state.get("allowed_tools", [])) or list(DETECTION_LITE_TOOLS)
+
+    try:
+        decision = decide_detection_lite_next_step(
+            user_query=state.get("user_query", ""),
+            current_goal=state.get("current_goal", ""),
+            allowed_tools=allowed_tools,
+            scratchpad=scratchpad,
+            prior_summaries=summaries,
+            max_tool_calls=max_tool_calls,
+            tool_calls_used=tool_calls_used,
+        )
+    except DecisionError as exc:
+        state["next_step"] = "end"
+        state["final_output"] = {
+            "suspected_faults": scratchpad.get("suspected_faults", ["decision_failure"]),
+            "suspected_services": scratchpad.get("suspected_services", []),
+            "suspected_pods": scratchpad.get("suspected_pods", []),
+            "evidence_summary": f"Detection-lite LLM decision failed: {exc}",
+            "backend_status": scratchpad.get("backend_status", {}),
+            "supporting_summaries": summaries,
+            "status": "completed_detection_lite",
+        }
+        return state
+
+    state["next_step"] = decision.next_step
+    state["latest_rationale"] = decision.rationale
+    state["latest_decision_confidence"] = decision.confidence
+
+    if decision.next_step == "use_tool":
+        if decision.selected_tool is None:
+            raise DecisionError("LLM returned use_tool without a selected_tool.")
+        state["selected_tool"] = decision.selected_tool
+        state["tool_input"] = decision.tool_input
+    else:
+        state["selected_tool"] = None
         state["tool_input"] = {}
-        state["next_step"] = "use_tool"
-        return state
+        state["final_output"] = {
+            "suspected_faults": scratchpad.get("suspected_faults", []),
+            "suspected_services": scratchpad.get("suspected_services", []),
+            "suspected_pods": scratchpad.get("suspected_pods", []),
+            "evidence_summary": scratchpad.get("evidence_summary", ""),
+            "backend_status": scratchpad.get("backend_status", {}),
+            "supporting_summaries": summaries,
+            "status": "completed_detection_lite",
+        }
 
-    if tool_calls_used == 1:
-        latest_summary = state.get("latest_summary", {})
-        backend_status = latest_summary.get("backend_status", {})
-        kubernetes_ok = bool(backend_status.get("kubernetes", {}).get("available", False))
-
-        if kubernetes_ok:
-            state["selected_tool"] = CLUSTER_OVERVIEW_TOOL
-            state["tool_input"] = {
-                "namespace": scratchpad.get("cluster_context", {}).get("namespace"),
-            }
-            state["next_step"] = "use_tool"
-        else:
-            state["next_step"] = "end"
-            state["final_output"] = {
-                "suspected_faults": ["mcp_server_call_failed"],
-                "suspected_services": [],
-                "suspected_pods": [],
-                "evidence_summary": "Kubernetes backend could not be verified during detection-lite.",
-                "backend_status": backend_status,
-                "supporting_summaries": summaries,
-                "status": "completed_detection_lite",
-            }
-        return state
-
-    state["next_step"] = "end"
     return state
 
 
-
 def detection_lite_tool_node(state: ToolSummaryState) -> ToolSummaryState:
-    """Execute the selected Kubernetes MCP tool for lightweight triage."""
-
-    selected_tool = state.get("selected_tool", BACKEND_STATUS_TOOL)
+    selected_tool = state.get("selected_tool")
     tool_input = state.get("tool_input", {})
+
+    if not selected_tool:
+        raise RuntimeError("Detection-lite tool node entered without selected_tool.")
 
     client = KubernetesMCPClient()
     try:
@@ -90,8 +138,8 @@ def detection_lite_tool_node(state: ToolSummaryState) -> ToolSummaryState:
     except Exception as exc:
         raw_result = {
             "ok": False,
-            "message": "Triage tool execution failed.",
             "error": str(exc),
+            "message": "Detection-lite tool execution failed.",
         }
 
     state["latest_tool_result"] = {
@@ -102,91 +150,114 @@ def detection_lite_tool_node(state: ToolSummaryState) -> ToolSummaryState:
     return state
 
 
-
-def _extract_service_names(raw_result: Dict[str, Any]) -> list[str]:
-    services = raw_result.get("services", [])
-    extracted: list[str] = []
-    for service in services:
-        if isinstance(service, dict):
-            name = service.get("name")
-            if name:
-                extracted.append(str(name))
-    return extracted
-
-
-
-def _extract_pod_names(raw_result: Dict[str, Any]) -> list[str]:
-    pods = raw_result.get("pods", [])
-    extracted: list[str] = []
-    for pod in pods:
-        if isinstance(pod, dict):
-            name = pod.get("name")
-            if name:
-                extracted.append(str(name))
-        elif isinstance(pod, str):
-            extracted.append(pod)
-    return extracted
-
-
-
 def detection_lite_summarizer_node(state: ToolSummaryState) -> ToolSummaryState:
-    """Summarize each triage tool call into a small grounded fingerprint."""
-
     latest_tool_result = state.get("latest_tool_result", {})
     raw_result = latest_tool_result.get("raw_result", {})
     tool_name = latest_tool_result.get("tool_name", BACKEND_STATUS_TOOL)
 
-    if raw_result.get("error"):
-        latest_summary = {
-            "tool_name": tool_name,
-            "error": raw_result.get("error", ""),
-            "evidence_summary": f"{tool_name} failed.",
-        }
-    elif tool_name == BACKEND_STATUS_TOOL:
-        latest_summary = {
-            "tool_name": tool_name,
-            "backend_status": raw_result,
-            "evidence_summary": "Backend availability collected.",
-        }
-    elif tool_name == CLUSTER_OVERVIEW_TOOL:
-        latest_summary = {
-            "tool_name": tool_name,
-            "backend_status": state.get("scratchpad", {}).get("backend_status", {}),
-            "suspected_faults": [],
-            "suspected_services": _extract_service_names(raw_result),
-            "suspected_pods": _extract_pod_names(raw_result),
-            "evidence_summary": "Cluster overview collected.",
-            "raw_result": raw_result,
-        }
-    else:
-        latest_summary = {
-            "tool_name": tool_name,
-            "raw_result": raw_result,
-            "evidence_summary": f"{tool_name} completed.",
-        }
-
     summaries = list(state.get("collected_summaries", []))
-    summaries.append(latest_summary)
-
     scratchpad = dict(state.get("scratchpad", {}))
-    if tool_name == BACKEND_STATUS_TOOL and not raw_result.get("error"):
+
+    latest_summary: Dict[str, Any] = {"tool_name": tool_name}
+
+    if raw_result.get("error"):
+        latest_summary["error"] = raw_result["error"]
+        latest_summary["evidence_summary"] = f"{tool_name} failed."
+        summaries.append(latest_summary)
+        state["scratchpad"] = scratchpad
+        state["latest_summary"] = latest_summary
+        state["collected_summaries"] = summaries
+        state["tool_calls_used"] = int(state.get("tool_calls_used", 0)) + 1
+        state["next_step"] = "end"
+        state["final_output"] = {
+            "suspected_faults": scratchpad.get("suspected_faults", ["tool_execution_failed"]),
+            "suspected_services": scratchpad.get("suspected_services", []),
+            "suspected_pods": scratchpad.get("suspected_pods", []),
+            "evidence_summary": latest_summary["evidence_summary"],
+            "backend_status": scratchpad.get("backend_status", {}),
+            "supporting_summaries": summaries,
+            "status": "completed_detection_lite",
+        }
+        return state
+
+    if tool_name == BACKEND_STATUS_TOOL:
         scratchpad["backend_status"] = raw_result
+        latest_summary["backend_status"] = raw_result
+        latest_summary["evidence_summary"] = "Backend availability collected."
+
+    elif tool_name == CLUSTER_OVERVIEW_TOOL:
+        services = _extract_service_names(raw_result)
+        pods = _extract_pod_names(raw_result)
+
+        scratchpad["suspected_services"] = services
+        scratchpad["suspected_pods"] = pods
+        scratchpad["evidence_summary"] = (
+            f"Cluster overview collected for namespace {raw_result.get('namespace')}. "
+            f"Found {raw_result.get('service_count', 0)} services and {raw_result.get('pod_count', 0)} pods."
+        )
+
+        latest_summary["suspected_services"] = services
+        latest_summary["suspected_pods"] = pods
+        latest_summary["raw_result"] = raw_result
+        latest_summary["evidence_summary"] = scratchpad["evidence_summary"]
+
+    elif tool_name == SERVICE_TRIAGE_METRICS_TOOL:
+        service_name = latest_tool_result.get("tool_input", {}).get("service_name")
+        scratchpad["evidence_summary"] = (
+            f"Collected service triage metrics for {service_name}."
+        )
+        latest_summary["service_name"] = service_name
+        latest_summary["raw_result"] = raw_result
+        latest_summary["evidence_summary"] = scratchpad["evidence_summary"]
+
+    elif tool_name == POD_TRIAGE_METRICS_TOOL:
+        pod_name = latest_tool_result.get("tool_input", {}).get("pod_name")
+        scratchpad["evidence_summary"] = (
+            f"Collected pod triage metrics for {pod_name}."
+        )
+        latest_summary["pod_name"] = pod_name
+        latest_summary["raw_result"] = raw_result
+        latest_summary["evidence_summary"] = scratchpad["evidence_summary"]
+
+    elif tool_name == SUMMARIZE_SERVICE_LOGS_TOOL:
+        service_name = latest_tool_result.get("tool_input", {}).get("service_name")
+        scratchpad["evidence_summary"] = (
+            f"Collected summarized service logs for {service_name}."
+        )
+        latest_summary["service_name"] = service_name
+        latest_summary["raw_result"] = raw_result
+        latest_summary["evidence_summary"] = scratchpad["evidence_summary"]
+
+    elif tool_name == SUMMARIZE_POD_LOGS_TOOL:
+        pod_name = latest_tool_result.get("tool_input", {}).get("pod_name")
+        scratchpad["evidence_summary"] = (
+            f"Collected summarized pod logs for {pod_name}."
+        )
+        latest_summary["pod_name"] = pod_name
+        latest_summary["raw_result"] = raw_result
+        latest_summary["evidence_summary"] = scratchpad["evidence_summary"]
+
+    else:
+        latest_summary["raw_result"] = raw_result
+        latest_summary["evidence_summary"] = f"{tool_name} completed."
+
+    summaries.append(latest_summary)
 
     state["scratchpad"] = scratchpad
     state["latest_summary"] = latest_summary
     state["collected_summaries"] = summaries
     state["tool_calls_used"] = int(state.get("tool_calls_used", 0)) + 1
 
-    if tool_name == CLUSTER_OVERVIEW_TOOL or raw_result.get("error"):
+    if int(state.get("tool_calls_used", 0)) >= int(state.get("max_tool_calls", 5)):
         state["next_step"] = "end"
         state["final_output"] = {
-            "suspected_faults": latest_summary.get("suspected_faults", []),
-            "suspected_services": latest_summary.get("suspected_services", []),
-            "suspected_pods": latest_summary.get("suspected_pods", []),
-            "evidence_summary": latest_summary.get("evidence_summary", ""),
+            "suspected_faults": scratchpad.get("suspected_faults", []),
+            "suspected_services": scratchpad.get("suspected_services", []),
+            "suspected_pods": scratchpad.get("suspected_pods", []),
+            "evidence_summary": scratchpad.get("evidence_summary", ""),
             "backend_status": scratchpad.get("backend_status", {}),
             "supporting_summaries": summaries,
-            "status": "completed_detection_lite",
+            "status": "tool_budget_exhausted",
         }
     else:
         state["next_step"] = "use_tool"
@@ -194,31 +265,43 @@ def detection_lite_summarizer_node(state: ToolSummaryState) -> ToolSummaryState:
     return state
 
 
-# -----------------------------------------------------------------------------
-# Tool-loop builder for the detection-lite stage
-# -----------------------------------------------------------------------------
-
-
 def build_detection_lite_loop():
-    """Build the reusable inner tool loop for lightweight triage."""
-
     return build_tool_loop(
         agent_fn=detection_lite_agent_node,
         tool_fn=detection_lite_tool_node,
         summarizer_fn=detection_lite_summarizer_node,
     )
 
+def _extract_query_service_candidates(user_query: str) -> list[str]:
+    q = user_query.lower()
+    candidates: list[str] = []
 
-# -----------------------------------------------------------------------------
-# Outer workflow runner
-# -----------------------------------------------------------------------------
+    for name in ["frontend", "backend", "auth", "gateway", "api", "web"]:
+        if name in q:
+            candidates.append(name)
+
+    return candidates
+
+
+def _extract_query_pod_candidates(user_query: str) -> list[str]:
+    q = user_query.lower()
+    candidates: list[str] = []
+
+    # simple placeholder: later you can do better parsing
+    for token in q.replace(",", " ").split():
+        if "pod" in token:
+            candidates.append(token)
+
+    return candidates
 
 
 def build_detection_lite_scratchpad(state: OuterAgentState) -> Dict[str, Any]:
-    """Extract triage-relevant context from the outer workflow state."""
+    user_query = state.get("user_query", "")
 
     return {
         "cluster_context": state.get("cluster_context", {}),
+        "query_service_candidates": _extract_query_service_candidates(user_query),
+        "query_pod_candidates": _extract_query_pod_candidates(user_query),
         "suspected_faults": state.get("suspected_faults", []),
         "suspected_services": state.get("suspected_services", []),
         "suspected_pods": state.get("suspected_pods", []),
@@ -227,30 +310,23 @@ def build_detection_lite_scratchpad(state: OuterAgentState) -> Dict[str, Any]:
     }
 
 
-
 def build_detection_lite_goal(state: OuterAgentState) -> str:
-    """Create a stage-specific objective for the triage loop."""
-
     return (
-        "Perform a lightweight Kubernetes triage pass and produce a compact "
-        "incident fingerprint suitable for historical incident retrieval. First "
-        "check backend availability, then collect cluster overview if Kubernetes "
-        "is available. Avoid Prometheus, Jaeger, and Neo4j dependent reasoning "
-        "when those backends are down."
+        "Perform a lightweight triage pass. Use backend status first, then "
+        "cluster overview, then cheap metrics and log summaries when useful. "
+        "Produce a compact fingerprint with likely affected services or pods."
     )
 
 
-
 def run_detection_lite_stage(state: OuterAgentState) -> OuterAgentState:
-    """Run the detection-lite stage as an inner reusable tool-summary loop."""
-
     loop = build_detection_lite_loop()
     tool_state = build_initial_tool_state(
         user_query=state.get("user_query", ""),
         current_goal=build_detection_lite_goal(state),
         scratchpad=build_detection_lite_scratchpad(state),
-        max_tool_calls=2,
+        max_tool_calls=5,
     )
+    tool_state["allowed_tools"] = list(DETECTION_LITE_TOOLS)
 
     result = loop.invoke(tool_state)
     final_output = result.get("final_output", {})
@@ -261,4 +337,7 @@ def run_detection_lite_stage(state: OuterAgentState) -> OuterAgentState:
     state["suspected_pods"] = final_output.get("suspected_pods", [])
     state["evidence_summary"] = final_output.get("evidence_summary", "")
     return state
+
+
+
 

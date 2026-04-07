@@ -6,6 +6,9 @@ import os
 import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class KubernetesMCPClient:
@@ -66,7 +69,15 @@ class KubernetesMCPClient:
                 )
             kwargs["cwd"] = str(repo)
 
-        print("K8s MCP launch:", kwargs)
+        if os.getenv("DEBUG", "false").lower() == "true":
+            logger.info(
+                "K8s MCP launch: %s",
+                {
+                    "command": kwargs.get("command"),
+                    "args": kwargs.get("args"),
+                    "cwd": kwargs.get("cwd"),
+                },
+            )
 
         server = StdioServerParameters(**kwargs)
 
