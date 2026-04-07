@@ -1,8 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, Field
+
+
+ToolInputValue: TypeAlias = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | List[str]
+    | List[int]
+    | List[float]
+    | List[bool]
+)
 
 
 # -----------------------------------------------------------------------------
@@ -27,7 +40,7 @@ class ToolDecision(BaseModel):
         default=None,
         description="The next tool to call. Use null when next_step='end'.",
     )
-    tool_input: Dict[str, str | int | float | bool | None] = Field(
+    tool_input: Dict[str, ToolInputValue] = Field(
         default_factory=dict,
         description="Arguments for the selected tool.",
     )

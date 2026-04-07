@@ -9,7 +9,7 @@ from .graph.workflow import build_workflow
 
 load_dotenv()
 
-DEFAULT_TEST_QUERY = "Investigate why the frontend service is failing and users are seeing errors."
+DEFAULT_TEST_QUERY = "Investigate why the prometheus-server service in namespace monitoring is failing and users are seeing errors."
 
 
 def build_demo_cluster_context() -> Dict[str, Any]:
